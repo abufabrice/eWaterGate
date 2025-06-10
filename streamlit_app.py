@@ -1,82 +1,93 @@
-# streamlit_app.py
 import streamlit as st
-import os
-import docx
-import uuid
-import requests
-from moviepy.editor import TextClip, ImageClip, concatenate_videoclips, AudioFileClip
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 
-UPLOAD_FOLDER = "uploads"
-OUTPUT_FOLDER = "videos"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+st.set_page_config(page_title="RO System Savings Calculator", layout="centered")
 
-ELEVENLABS_API_KEY = st.secrets["ELEVENLABS_API_KEY"]
-VOICE_ID = st.secrets["VOICE_ID"]
+st.title("🏠 Reverse Osmosis Cost Savings Simulator")
+st.markdown("""
+This tool estimates how much your household can save by using a home-based reverse osmosis (RO) system
+instead of buying bottled water.
+""")
 
-st.set_page_config(page_title="Doc-to-Video", layout="centered")
-st.title("📄➡️🎥 Google Doc to Narrated Video")
+# --- User Inputs
+st.header("1. Enter Household Characteristics")
 
-uploaded_file = st.file_uploader("Upload a Google Doc (.docx) with text and images", type=["docx"])
+V_daily = st.number_input("Daily water consumption (liters)", min_value=1.0, value=5.0, step=0.5)
+D = st.slider("Number of days to simulate", 30, 365, 365)
+C_bottled = st.number_input("Cost of bottled water per liter (XAF)", min_value=10.0, value=150.0)
+C_system = st.number_input("One-time cost of RO system (XAF)", min_value=10000.0, value=75000.0)
 
-def parse_doc(filepath):
-    doc = docx.Document(filepath)
-    blocks = []
-    for para in doc.paragraphs:
-        text = para.text.strip()
-        if text:
-            blocks.append({"type": "text", "content": text})
-    for rel in doc.part._rels:
-        rel_obj = doc.part._rels[rel]
-        if "image" in rel_obj.target_ref:
-            img_part = rel_obj.target_part
-            img_data = img_part.blob
-            img_name = f"{uuid.uuid4()}.png"
-            img_path = os.path.join(UPLOAD_FOLDER, img_name)
-            with open(img_path, "wb") as f:
-                f.write(img_data)
-            blocks.append({"type": "image", "content": img_path})
-    return blocks
+st.subheader("Cartridge Information")
+cartridge_data = [
+    {"name": "Sediment Filter", "cost": 5000, "capacity": 3000},
+    {"name": "Carbon Filter", "cost": 7000, "capacity": 6000},
+    {"name": "RO Membrane", "cost": 15000, "capacity": 12000}
+]
 
-def generate_audio(blocks):
-    text = " ".join(b["content"] for b in blocks if b["type"] == "text"])
-    response = requests.post(
-        f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}",
-        headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
-        json={"text": text, "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}}
-    )
-    audio_path = os.path.join(OUTPUT_FOLDER, f"{uuid.uuid4()}.mp3")
-    with open(audio_path, "wb") as f:
-        f.write(response.content)
-    return audio_path
+cartridges = []
+for cart in cartridge_data:
+    cost = st.number_input(f"{cart['name']} - Cost (XAF)", min_value=1000.0, value=float(cart['cost']))
+    capacity = st.number_input(f"{cart['name']} - Capacity (liters)", min_value=100.0, value=float(cart['capacity']))
+    cartridges.append({"name": cart['name'], "cost": cost, "capacity": capacity})
 
-def build_video(blocks, audio_path):
-    clips = []
-    for b in blocks:
-        if b["type"] == "text":
-            clip = TextClip(b["content"], fontsize=40, color='white', size=(1280, 720)).set_duration(5)
-        elif b["type"] == "image":
-            clip = ImageClip(b["content"]).set_duration(5).resize(height=720)
-        clips.append(clip)
-    final_clip = concatenate_videoclips(clips, method="compose")
-    audio_clip = AudioFileClip(audio_path)
-    video_with_audio = final_clip.set_audio(audio_clip)
-    output_path = os.path.join(OUTPUT_FOLDER, f"final_video_{uuid.uuid4()}.mp4")
-    video_with_audio.write_videofile(output_path, fps=24)
-    return output_path
+# --- Calculation Logic
+def calculate(V_daily, D, C_bottled, C_system, cartridges):
+    V_total = V_daily * D
+    C_bottled_total = V_total * C_bottled
 
-if uploaded_file is not None:
-    st.info("Parsing and generating video... This may take a minute.")
-    with st.spinner("Processing your document..."):
-        filename = f"{uuid.uuid4()}.docx"
-        filepath = os.path.join(UPLOAD_FOLDER, filename)
-        with open(filepath, "wb") as f:
-            f.write(uploaded_file.read())
-        blocks = parse_doc(filepath)
-        audio = generate_audio(blocks)
-        video = build_video(blocks, audio)
+    cart_rows = []
+    total_cart_cost = 0
+    for cart in cartridges:
+        replacements = np.ceil(V_total / cart['capacity'])
+        cost = replacements * cart['cost']
+        total_cart_cost += cost
+        cart_rows.append([cart['name'], int(replacements), cost])
 
-    st.success("✅ Video generated successfully!")
-    st.video(video)
-    with open(video, "rb") as f:
-        st.download_button("Download Video", f, file_name="generated_video.mp4")
+    C_RO_total = C_system + total_cart_cost
+    savings = C_bottled_total - C_RO_total
+
+    return V_total, C_bottled_total, C_RO_total, savings, cart_rows
+
+# --- Output Section
+st.header("2. Simulation Results")
+
+if st.button("Simulate Savings"):
+    V_total, bottled_cost, ro_cost, savings, cart_rows = calculate(V_daily, D, C_bottled, C_system, cartridges)
+
+    st.metric("Total Volume Filtered (liters)", f"{V_total:.0f} L")
+    st.metric("Cost of Bottled Water", f"{bottled_cost:,.0f} XAF")
+    st.metric("Cost of RO System (incl. filters)", f"{ro_cost:,.0f} XAF")
+    st.metric("Net Savings", f"{savings:,.0f} XAF")
+
+    st.subheader("Cartridge Replacement Breakdown")
+    df = pd.DataFrame(cart_rows, columns=["Cartridge", "Replacements", "Total Cost (XAF)"])
+    st.dataframe(df, use_container_width=True)
+
+    # --- Sensitivity Chart
+    st.subheader("3. Sensitivity Analysis: Daily Water Usage vs. Savings")
+    V_range = np.linspace(1, 20, 100)
+    savings_curve = []
+    for V in V_range:
+        _, _, _, s, _ = calculate(V, D, C_bottled, C_system, cartridges)
+        savings_curve.append(s)
+
+    fig, ax = plt.subplots()
+    ax.plot(V_range, savings_curve, label="Net Savings", color="green")
+    ax.set_xlabel("Daily Water Usage (L)")
+    ax.set_ylabel("Savings (XAF)")
+    ax.set_title("Sensitivity of Savings to Daily Usage")
+    ax.grid(True)
+    st.pyplot(fig)
+
+    # --- Break-even Estimation
+    st.subheader("4. Estimated Break-even Point")
+    if savings > 0:
+        try:
+            t = C_system / (V_daily * C_bottled - sum([cart['cost'] / cart['capacity'] for cart in cartridges]) * V_daily)
+            st.success(f"Break-even point: {int(np.ceil(t))} days")
+        except ZeroDivisionError:
+            st.warning("Unable to compute break-even point (division by zero).")
+    else:
+        st.warning("No savings with current settings. Try adjusting usage or costs.")
