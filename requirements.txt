@@ -1,4 +1,4 @@
 streamlit
-python-docx
-moviepy
-requests
+pandas
+numpy
+matplotlib
